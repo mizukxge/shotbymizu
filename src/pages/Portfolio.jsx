@@ -113,7 +113,7 @@ export default function PortfolioPage() {
       />
 
       <p className="mt-8 text-sm opacity-70">
-        5–10 images per gallery, mixed orientations, responsive & lazy-loaded.
+       
       </p>
     </main>
   );
