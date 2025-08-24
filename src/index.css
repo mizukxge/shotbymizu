@@ -1,0 +1,143 @@
+﻿/* Tailwind v4 */
+@import "tailwindcss";
+
+/* Smooth scroll */
+:root { scroll-behavior: smooth; }
+
+/* -------------------------------------------------
+   Register animatable custom props for gradient stops
+   ------------------------------------------------- */
+@property --bg1 { syntax: '<color>'; inherits: true; initial-value: #f4f4f5; }
+@property --bg2 { syntax: '<color>'; inherits: true; initial-value: #e4e4e7; }
+
+/* ------------ */
+/* Base theming */
+/* ------------ */
+@layer base {
+  html {
+    /* Light theme gradient stops */
+    --bg1: #f4f4f5; /* zinc-100 */
+    --bg2: #e4e4e7; /* zinc-200 */
+
+    /* Page background (animated gradient) */
+    background-image: linear-gradient(180deg, var(--bg1), var(--bg2));
+    background-attachment: fixed;
+    color: #18181b; /* zinc-900 */
+
+    /* Smooth transitions for theme change */
+    transition:
+      --bg1 500ms cubic-bezier(.4,0,.2,1),
+      --bg2 500ms cubic-bezier(.4,0,.2,1),
+      color 500ms cubic-bezier(.4,0,.2,1),
+      background-color 500ms cubic-bezier(.4,0,.2,1);
+  }
+
+  /* Dark theme overrides (just change vars + text color) */
+  html.dark {
+    --bg1: #0a0a0a; /* zinc-950 */
+    --bg2: #18181b; /* zinc-900 */
+    color: #fafafa; /* zinc-50 */
+  }
+
+  /* Body inherits so wrappers can just use bg-inherit/text-inherit */
+  body {
+    background: transparent;
+    color: inherit;
+  }
+}
+
+/* -------------------------- */
+/* Optional helper (not used in @apply anymore) */
+/* -------------------------- */
+@layer utilities {
+  .theme-smooth {
+    transition-property: color, background-color, border-color, fill, stroke, outline-color, box-shadow;
+    transition-duration: 500ms;
+    transition-timing-function: cubic-bezier(.4, 0, .2, 1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Keep animations accessible */
+  .theme-smooth, html { transition: none !important; }
+}
+
+/* --------------- */
+/* Reusable styles */
+/* --------------- */
+@layer components {
+  /* IMPORTANT: no dark:* here (those become media queries and override your toggle) */
+  .form-control {
+    @apply w-full rounded-xl border px-3 py-2
+           bg-zinc-50 text-black border-black
+           placeholder-zinc-500
+           focus:outline-none focus:ring-2 focus:ring-zinc-900;
+
+    /* Match html’s 500ms so fields finish in sync with the page */
+    transition-property: color, background-color, border-color, box-shadow;
+    transition-duration: 500ms; /* <- optional alignment INCLUDED */
+    transition-timing-function: cubic-bezier(.4, 0, .2, 1);
+  }
+
+  .btn-primary {
+    @apply rounded-xl px-4 py-2
+           bg-black text-white
+           dark:bg-white dark:text-black
+           hover:opacity-95 transition;
+  }
+
+  /* ---------- OVERRIDE PACK (locks exact light/dark for fields) ---------- */
+  html.light :where(input.form-control, select.form-control, textarea.form-control) {
+    @apply bg-zinc-50 text-black border border-black;
+  }
+  html.dark :where(input.form-control, select.form-control, textarea.form-control) {
+    @apply bg-zinc-900 text-zinc-50 border border-zinc-700;
+  }
+
+  /* Focus rings with strong contrast */
+  html.light :where(input.form-control, select.form-control, textarea.form-control):focus {
+    @apply ring-2 ring-zinc-900 outline-none;
+  }
+  html.dark :where(input.form-control, select.form-control, textarea.form-control):focus {
+    @apply ring-2 ring-zinc-200 outline-none;
+  }
+}
+
+/* ---------------------------
+   Autofill: instant, no lag
+   (removes 5000s transition and paints bg via inset shadow)
+   --------------------------- */
+input.form-control:-webkit-autofill,
+input.form-control:-webkit-autofill:hover,
+input.form-control:-webkit-autofill:focus,
+textarea.form-control:-webkit-autofill,
+select.form-control:-webkit-autofill {
+  -webkit-text-fill-color: #000 !important;
+  box-shadow: 0 0 0px 1000px #f4f4f5 inset; /* light bg */
+  transition: background-color 0s, box-shadow 0s, color 0s;
+  caret-color: #000;
+}
+html.dark input.form-control:-webkit-autofill,
+html.dark input.form-control:-webkit-autofill:hover,
+html.dark input.form-control:-webkit-autofill:focus,
+html.dark textarea.form-control:-webkit-autofill,
+html.dark select.form-control:-webkit-autofill {
+  -webkit-text-fill-color: #fafafa !important;
+  box-shadow: 0 0 0px 1000px #0a0a0a inset; /* dark bg */
+  transition: background-color 0s, box-shadow 0s, color 0s;
+  caret-color: #fafafa;
+}
+
+/* Optional: keep textarea resizing sane */
+textarea { resize: vertical; }
+@layer components {
+  /* ...existing components... */
+
+  /* Theme-locked disabled button (mirrors the working form-control pattern) */
+  html.light .btn-disabled {
+    @apply bg-zinc-200 text-zinc-700 cursor-not-allowed;
+  }
+  html.dark .btn-disabled {
+    @apply bg-zinc-800 text-zinc-300 cursor-not-allowed;
+  }
+}
