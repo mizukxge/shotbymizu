@@ -1,24 +1,21 @@
 ﻿// src/components/Masonry.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import LazyImage from "./LazyImage.jsx";
+import { SITE } from "../config/site.js";
 
 /**
  * Masonry (named export)
- *
- * - CSS Columns layout preserved (original look + consistent gutters)
+ * - CSS Columns layout preserved
  * - Preloads all images before revealing
- * - Measures each tile (top/left) to compute a true ROW-wise order for the fade-in
- * - One-by-one reveal with subtle fade + lift + scale
- * - Lightbox: no X button; click backdrop / Esc to close; ←/→ for navigation
- * - Arrow buttons now FORCE black in light mode and white in dark mode
+ * - Measures tiles to compute row-wise reveal order
+ * - Lightbox: watermark overlay + "Download (watermarked)" button
  */
 export function Masonry({
   items = [],
   columnClass = "columns-1 sm:columns-2 lg:columns-3 gap-6",
   seed,
-  watermark = false, // reserved
+  watermark = false, // still respected on grid thumbnails
 }) {
-  // Normalize incoming image objects
   const images = useMemo(
     () =>
       (items || []).map((it, i) => {
@@ -29,30 +26,30 @@ export function Masonry({
     [items, seed]
   );
 
-  // Preload + visibility sequencing
+  // Preload all images first
   const [ready, setReady] = useState(false);
   const [visible, setVisible] = useState(() => images.map(() => false));
-
-  // Refs for measuring tile positions
   const itemRefs = useRef([]);
   itemRefs.current = [];
 
-  // Preload all images first
   useEffect(() => {
     let cancelled = false;
     setReady(false);
     setVisible(images.map(() => false));
 
-    const sources = images.map((i) => i.src).filter(Boolean);
-    const preload = (src) =>
+    const preloadOne = (src) =>
       new Promise((resolve) => {
         const img = new Image();
-        img.onload = () => resolve(src);
-        img.onerror = () => resolve(src); // don't block on errors
+        img.decoding = "async";
+        img.loading = "eager";
+        img.onload = () => resolve(true);
+        img.onerror = () => resolve(true); // don't block sequence
+        // IMPORTANT for canvas export safety if your origin ever differs:
+        img.crossOrigin = "anonymous";
         img.src = src;
       });
 
-    Promise.all(sources.map(preload)).then(() => {
+    Promise.all(images.map((i) => preloadOne(i.src))).then(() => {
       if (!cancelled) setReady(true);
     });
 
@@ -68,21 +65,17 @@ export function Masonry({
     const timers = [];
 
     const measureAndReveal = () => {
-      // Measure each tile’s top/left
       const positions = images.map((_, i) => {
         const el = itemRefs.current[i];
         if (!el) return { i, top: Number.POSITIVE_INFINITY, left: 0 };
         const rect = el.getBoundingClientRect();
-        // Round to avoid sub-pixel jitter affecting sort order
         return { i, top: Math.round(rect.top), left: Math.round(rect.left) };
       });
 
-      // Sort by top then left → row-wise order
       positions.sort((a, b) => (a.top - b.top) || (a.left - b.left));
 
-      // Sequentially make them visible in that order
       positions.forEach((p, rank) => {
-        const delay = 60 + rank * 110; // tweak cadence: base 60ms + 110ms per item
+        const delay = 60 + rank * 110;
         const t = setTimeout(() => {
           setVisible((prev) => {
             if (prev[p.i]) return prev;
@@ -95,22 +88,14 @@ export function Masonry({
       });
     };
 
-    // Double RAF to ensure layout is committed (columns need a paint)
     raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(measureAndReveal);
     });
-
-    const onResize = () => {
-      // If the viewport resizes during sequence, we could recompute.
-      // Keeping simple: we don't restart mid-sequence.
-    };
-    window.addEventListener("resize", onResize, { passive: true });
 
     return () => {
       cancelAnimationFrame(raf1);
       cancelAnimationFrame(raf2);
       timers.forEach(clearTimeout);
-      window.removeEventListener("resize", onResize);
     };
   }, [ready, images.length]);
 
@@ -150,12 +135,8 @@ export function Masonry({
               onClick={() => setOpenIndex(i)}
               aria-label={img.alt ? `Open image: ${img.alt}` : "Open image"}
               className={[
-                // IMPORTANT for consistent gaps in a column layout:
-                // - mb-6 = vertical gutter (match container gap-6)
-                // - break-inside-avoid = prevent column breaks through an item
-                "mb-6 break-inside-avoid block w-full group focus:outline-none",
+                "mb-6 break-inside-avoid block w-full group focus:outline-none cursor-zoom-in",
                 "transition-all duration-500 ease-out",
-                // subtle lift + scale + fade (revealed row-wise)
                 isVisible
                   ? "opacity-100 translate-y-0 scale-100"
                   : "opacity-0 translate-y-1 scale-[0.98]",
@@ -163,12 +144,12 @@ export function Masonry({
               ].join(" ")}
             >
               <div className="overflow-hidden rounded-2xl">
-                {/* eager: we already preloaded; avoids lazy jank */}
                 <LazyImage
                   src={img.src}
                   alt={img.alt || ""}
                   loading="eager"
                   className="w-full h-auto transition-transform duration-300 group-hover:scale-[1.02]"
+                  watermark={watermark}
                 />
               </div>
             </button>
@@ -192,6 +173,10 @@ export function Masonry({
     </>
   );
 }
+
+/* -----------------------
+   Lightbox with watermark
+   ----------------------- */
 
 function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
   const nextBtnRef = useRef(null);
@@ -226,23 +211,78 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
   // Smooth exit then unmount
   const requestClose = () => {
     setShow(false);
-    setTimeout(onClose, 320); // matches duration-300 + tiny buffer
+    setTimeout(onClose, 320);
   };
 
-  // Backdrop click closes
-  const onBackdropPointer = (e) => {
-    if (e.currentTarget === e.target) requestClose();
+  // Prevent right-click save in the modal (soft deterrent)
+  const preventContext = (e) => e.preventDefault();
+
+  // Build a *watermarked* image and download it
+  const downloadWatermarked = async () => {
+    try {
+      const src = image?.src;
+      if (!src) return;
+
+      // Load image fully
+      const img = await loadImage(src);
+
+      // Create canvas
+      const canvas = document.createElement("canvas");
+      const W = img.naturalWidth || img.width;
+      const H = img.naturalHeight || img.height;
+      canvas.width = W;
+      canvas.height = H;
+      const ctx = canvas.getContext("2d");
+
+      // Draw original
+      ctx.drawImage(img, 0, 0, W, H);
+
+      // Watermark text
+      const text = `© ${String(SITE.owner || "shotbymizu").toUpperCase()}`;
+
+      // Size & placement (relative to image size)
+      const pad = Math.max(10, Math.round(W * 0.012));
+      const fontPx = Math.max(14, Math.round(W * 0.018));
+      ctx.font = `600 ${fontPx}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace`;
+      ctx.textBaseline = "bottom";
+
+      const metrics = ctx.measureText(text);
+      const tw = metrics.width;
+      const th = fontPx; // rough height
+
+      const x = W - pad - tw;
+      const y = H - pad;
+
+      // Shadow for legibility
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(x - pad * 0.4, y - th - pad * 0.4, tw + pad * 0.8, th + pad * 0.8);
+
+      // Text (white)
+      ctx.fillStyle = "#fff";
+      ctx.fillText(text, x, y);
+
+      // Export & download
+      const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.92));
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = makeDownloadName(src, SITE?.owner);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Download failed", e);
+    }
   };
 
   // Theme-aware glass buttons:
-  // - Light mode: white glass chip + BLACK arrow
-  // - Dark mode: black glass chip + WHITE arrow
   const btnBase =
     "h-10 w-10 rounded-full flex items-center justify-center shadow " +
     "focus:outline-none focus:ring-2 focus:ring-white dark:focus:ring-black " +
     "transform transition-transform duration-200 hover:scale-110";
   const btnTheme =
-    "bg-white/60 text-black dark:bg-black/50 dark:text-white " + // force correct text (arrow) color per theme
+    "bg-white/60 text-black dark:bg-black/50 dark:text-white " +
     "backdrop-blur-md ring-1 ring-black/15 dark:ring-white/20";
 
   return (
@@ -257,8 +297,9 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
         transition-all duration-300
         ${show ? "bg-black/60 backdrop-blur-sm" : "bg-black/0 backdrop-blur-0"}
       `}
-      onMouseDown={onBackdropPointer}
-      onTouchStart={onBackdropPointer}
+      onMouseDown={(e) => e.currentTarget === e.target && requestClose()}
+      onTouchStart={(e) => e.currentTarget === e.target && requestClose()}
+      onContextMenu={preventContext}
     >
       {/* Image container */}
       <div
@@ -272,22 +313,16 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
         onMouseDown={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
       >
-        {/* Prev / Next (no X button) */}
+        {/* Prev / Next */}
         {count > 1 && (
           <>
             <button
               type="button"
               onClick={onPrev}
               aria-label="Previous image"
-              className={`absolute left-2 md:left-4 top-1/2 -translate-y-1/2 ${btnBase} ${btnTheme}`}
+              className={`absolute left-2 md:left-4 top-1/2 -translate-y-1/2 ${btnBase} ${btnTheme} cursor-pointer`}
             >
-              {/* Left chevron — explicitly themed to avoid parent overrides */}
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-5 w-5 text-black dark:text-white"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-black dark:text-white" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
               </svg>
             </button>
@@ -297,28 +332,31 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
               type="button"
               onClick={onNext}
               aria-label="Next image"
-              className={`absolute right-2 md:right-4 top-1/2 -translate-y-1/2 ${btnBase} ${btnTheme}`}
+              className={`absolute right-2 md:right-4 top-1/2 -translate-y-1/2 ${btnBase} ${btnTheme} cursor-pointer`}
             >
-              {/* Right chevron — explicitly themed to avoid parent overrides */}
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-5 w-5 text-black dark:text-white"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-black dark:text-white" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M9 6 7.59 7.41 12.17 12l-4.58 4.59L9 18l6-6z" />
               </svg>
             </button>
           </>
         )}
 
-        {/* Image */}
-        <img
-          src={image?.src}
-          alt={image?.alt || ""}
-          className="max-h-[88vh] w-auto max-w-full rounded-2xl shadow-2xl select-none"
-          draggable="false"
-        />
+        {/* Image + overlay watermark (visible while viewing) */}
+        <div className="relative">
+          <img
+            src={image?.src}
+            alt={image?.alt || ""}
+            className="max-h-[88vh] w-auto max-w-full rounded-2xl shadow-2xl select-none"
+            draggable="false"
+            onContextMenu={preventContext}
+            crossOrigin="anonymous"
+          />
+
+          {/* On-screen watermark */}
+          <span className="pointer-events-none absolute bottom-3 right-4 text-[11px] md:text-xs tracking-widest uppercase opacity-80 select-none text-white bg-black/40 rounded px-2 py-1">
+            © {String(SITE.owner || "shotbymizu").toUpperCase()}
+          </span>
+        </div>
 
         {/* Counter (bottom-center) */}
         {count > 1 && (
@@ -326,7 +364,46 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
             {index + 1} / {count}
           </div>
         )}
+
+        {/* Download (watermarked) */}
+        <button
+          type="button"
+          onClick={downloadWatermarked}
+          className={`absolute bottom-3 right-3 h-9 px-3 rounded-full text-xs font-medium
+                      ${btnTheme} cursor-pointer`}
+          title="Download (watermarked)"
+        >
+          Download
+        </button>
       </div>
     </div>
   );
+}
+
+/* -------------
+   Small helpers
+   ------------- */
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.decoding = "async";
+    img.crossOrigin = "anonymous"; // safer for canvas export if ever served with CORS
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+function makeDownloadName(src, owner) {
+  try {
+    const u = new URL(src, window.location.origin);
+    const base = u.pathname.split("/").pop() || "image.jpg";
+    const dot = base.lastIndexOf(".");
+    const name = dot > 0 ? base.slice(0, dot) : base;
+    const brand = (owner || "shotbymizu").toString().replace(/\s+/g, "");
+    return `${name}-${brand}-wm.jpg`;
+  } catch {
+    return `download-${(owner || "shotbymizu")}-wm.jpg`;
+  }
 }

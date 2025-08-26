@@ -42,7 +42,7 @@ export const IMAGES = {
   aerialLandscape: gen("/images/Aerial-Landscape/image", 12, {
     altPrefix: "Aerial/Landscape",
   }),
-  fashionAbstract: gen("/images/Fashion-Abstract/image", 12, {
+  fashionAbstract: gen("/images/Fashion-Abstract/image", 8, {
     altPrefix: "Fashion/Abstract",
   }),
   portrait: gen("/images/Portrait/image", 15, {
