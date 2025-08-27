@@ -1,128 +1,84 @@
 ﻿// src/components/Masonry.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import LazyImage from "./LazyImage.jsx";
-import { SITE } from "../config/site.js";
 
 /**
- * Masonry (named export)
- * - CSS Columns layout preserved
- * - Preloads all images before revealing
- * - Measures tiles to compute row-wise reveal order
- * - Lightbox: watermark overlay, no download button
+ * Masonry
+ * - Uses CSS columns for natural masonry
+ * - No global preload gate → blur-up is visible per tile
+ * - Reserves space via aspect-ratio so layout is stable before images load
+ * - Computes row-wise order (top/left measurement) and applies staggered reveal
+ * - Optional lightbox kept, but you can remove it if not needed
  */
 export function Masonry({
   items = [],
   columnClass = "columns-1 sm:columns-2 lg:columns-3 gap-6",
-  seed,
-  watermark = false,
+  watermark = false, // reserved
 }) {
+  // Normalize items (ensure width/height present when available)
   const images = useMemo(
     () =>
       (items || []).map((it, i) => {
         const src = it?.src || it?.url || it?.image || "";
         const alt = it?.alt || it?.title || `Image ${i + 1}`;
-        return { src, alt, ...it };
+        const width = it?.width;
+        const height = it?.height;
+        return { src, alt, width, height, ...it };
       }),
-    [items, seed]
+    [items]
   );
 
-  const [ready, setReady] = useState(false);
-  const [visible, setVisible] = useState(() => images.map(() => false));
+  // Measure each tile to determine row-wise order → stagger timing
   const itemRefs = useRef([]);
   itemRefs.current = [];
 
-  // Preload all images first
+  const [ready, setReady] = useState(false);
+  const [orderIndex, setOrderIndex] = useState([]); // index -> rank in visual order
+
   useEffect(() => {
-    let cancelled = false;
-    setReady(false);
-    setVisible(images.map(() => false));
+    // Wait a frame so the browser can lay out the column masonry
+    let r1, r2;
+    r1 = requestAnimationFrame(() => {
+      r2 = requestAnimationFrame(() => {
+        const positions = itemRefs.current.map((el, i) => {
+          if (!el) return { i, top: 0, left: 0 };
+          const rect = el.getBoundingClientRect();
+          return { i, top: Math.round(rect.top), left: Math.round(rect.left) };
+        });
 
-    const preloadOne = (src) =>
-      new Promise((resolve) => {
-        const img = new Image();
-        img.decoding = "async";
-        img.loading = "eager";
-        img.onload = () => resolve(true);
-        img.onerror = () => resolve(true);
-        img.crossOrigin = "anonymous";
-        img.src = src;
+        positions.sort((a, b) =>
+          a.top === b.top ? a.left - b.left : a.top - b.top
+        );
+
+        const map = new Array(positions.length);
+        positions.forEach((p, rank) => (map[p.i] = rank));
+        setOrderIndex(map);
+        setReady(true);
       });
-
-    Promise.all(images.map((i) => preloadOne(i.src))).then(() => {
-      if (!cancelled) setReady(true);
     });
 
     return () => {
-      cancelled = true;
+      cancelAnimationFrame(r1);
+      cancelAnimationFrame(r2);
     };
-  }, [images]);
+  }, [images.length]);
 
-  // After ready & render, measure tiles and reveal row-by-row
-  useEffect(() => {
-    if (!ready) return;
-    let raf1, raf2;
-    const timers = [];
-
-    const measureAndReveal = () => {
-      const positions = images.map((_, i) => {
-        const el = itemRefs.current[i];
-        if (!el) return { i, top: Number.POSITIVE_INFINITY, left: 0 };
-        const rect = el.getBoundingClientRect();
-        return { i, top: Math.round(rect.top), left: Math.round(rect.left) };
-      });
-
-      positions.sort((a, b) => (a.top - b.top) || (a.left - b.left));
-
-      positions.forEach((p, rank) => {
-        const delay = 60 + rank * 110;
-        const t = setTimeout(() => {
-          setVisible((prev) => {
-            if (prev[p.i]) return prev;
-            const next = prev.slice();
-            next[p.i] = true;
-            return next;
-          });
-        }, delay);
-        timers.push(t);
-      });
-    };
-
-    raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(measureAndReveal);
-    });
-
-    return () => {
-      cancelAnimationFrame(raf1);
-      cancelAnimationFrame(raf2);
-      timers.forEach(clearTimeout);
-    };
-  }, [ready, images.length]);
-
+  // Lightbox (unchanged behavior)
   const [openIndex, setOpenIndex] = useState(null);
 
   useEffect(() => {
     if (openIndex !== null) {
       const prev = document.body.style.overflow;
       document.body.style.overflow = "hidden";
-      return () => {
-        document.body.style.overflow = prev;
-      };
+      return () => (document.body.style.overflow = prev);
     }
   }, [openIndex]);
-
-  if (!ready) {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <div className="h-5 w-5 rounded-full border-2 border-zinc-400 border-t-transparent animate-spin" />
-      </div>
-    );
-  }
 
   return (
     <>
       <div className={columnClass}>
         {images.map((img, i) => {
-          const isVisible = visible[i];
+          const rank = orderIndex[i] ?? i;
           return (
             <button
               key={(img.src || "") + i}
@@ -133,19 +89,19 @@ export function Masonry({
               className={[
                 "mb-6 break-inside-avoid block w-full group focus:outline-none cursor-zoom-in",
                 "transition-all duration-500 ease-out",
-                isVisible
-                  ? "opacity-100 translate-y-0 scale-100"
-                  : "opacity-0 translate-y-1 scale-[0.98]",
-                isVisible ? "pointer-events-auto" : "pointer-events-none",
+                ready ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1",
               ].join(" ")}
+              style={{
+                transitionDelay: ready ? `${rank * 90}ms` : "0ms",
+              }}
             >
               <div className="overflow-hidden rounded-2xl">
                 <LazyImage
                   src={img.src}
-                  alt={img.alt || ""}
-                  loading="eager"
-                  className="w-full h-auto transition-transform duration-300 group-hover:scale-[1.02]"
-                  watermark={watermark}
+                  alt={img.alt}
+                  width={img.width}
+                  height={img.height}
+                  className="w-full"
                 />
               </div>
             </button>
@@ -169,9 +125,6 @@ export function Masonry({
   );
 }
 
-/* -----------------------
-   Lightbox with watermark
-   ----------------------- */
 function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
   const nextBtnRef = useRef(null);
   const containerRef = useRef(null);
@@ -188,13 +141,9 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === "Escape") {
-        requestClose();
-      } else if (e.key === "ArrowRight" && count > 1) {
-        onNext();
-      } else if (e.key === "ArrowLeft" && count > 1) {
-        onPrev();
-      }
+      if (e.key === "Escape") requestClose();
+      else if (e.key === "ArrowRight" && count > 1) onNext();
+      else if (e.key === "ArrowLeft" && count > 1) onPrev();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -205,12 +154,14 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
     setTimeout(onClose, 320);
   };
 
-  const preventContext = (e) => e.preventDefault();
+  const onBackdropPointer = (e) => {
+    if (e.currentTarget === e.target) requestClose();
+  };
 
   const btnBase =
     "h-10 w-10 rounded-full flex items-center justify-center shadow " +
     "focus:outline-none focus:ring-2 focus:ring-white dark:focus:ring-black " +
-    "transform transition-transform duration-200 hover:scale-110";
+    "transform transition-transform duration-200 hover:scale-110 cursor-pointer";
   const btnTheme =
     "bg-white/60 text-black dark:bg-black/50 dark:text-white " +
     "backdrop-blur-md ring-1 ring-black/15 dark:ring-white/20";
@@ -227,9 +178,8 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
         transition-all duration-300
         ${show ? "bg-black/60 backdrop-blur-sm" : "bg-black/0 backdrop-blur-0"}
       `}
-      onMouseDown={(e) => e.currentTarget === e.target && requestClose()}
-      onTouchStart={(e) => e.currentTarget === e.target && requestClose()}
-      onContextMenu={preventContext}
+      onMouseDown={onBackdropPointer}
+      onTouchStart={onBackdropPointer}
     >
       <div
         ref={containerRef}
@@ -248,9 +198,14 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
               type="button"
               onClick={onPrev}
               aria-label="Previous image"
-              className={`absolute left-2 md:left-4 top-1/2 -translate-y-1/2 ${btnBase} ${btnTheme} cursor-pointer`}
+              className={`absolute left-2 md:left-4 top-1/2 -translate-y-1/2 ${btnBase} ${btnTheme}`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-black dark:text-white" viewBox="0 0 24 24" fill="currentColor">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-5 w-5 text-black dark:text-white"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
                 <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
               </svg>
             </button>
@@ -260,29 +215,26 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
               type="button"
               onClick={onNext}
               aria-label="Next image"
-              className={`absolute right-2 md:right-4 top-1/2 -translate-y-1/2 ${btnBase} ${btnTheme} cursor-pointer`}
+              className={`absolute right-2 md:right-4 top-1/2 -translate-y-1/2 ${btnBase} ${btnTheme}`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-black dark:text-white" viewBox="0 0 24 24" fill="currentColor">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-5 w-5 text-black dark:text-white"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
                 <path d="M9 6 7.59 7.41 12.17 12l-4.58 4.59L9 18l6-6z" />
               </svg>
             </button>
           </>
         )}
 
-        {/* Image + overlay watermark */}
-        <div className="relative">
-          <img
-            src={image?.src}
-            alt={image?.alt || ""}
-            className="max-h-[88vh] w-auto max-w-full rounded-2xl shadow-2xl select-none"
-            draggable="false"
-            onContextMenu={preventContext}
-            crossOrigin="anonymous"
-          />
-          <span className="pointer-events-none absolute bottom-3 right-4 text-[11px] md:text-xs tracking-widest uppercase opacity-80 select-none text-white bg-black/40 rounded px-2 py-1">
-            © {String(SITE.owner || "shotbymizu").toUpperCase()}
-          </span>
-        </div>
+        <img
+          src={image?.src}
+          alt={image?.alt || ""}
+          className="max-h-[88vh] w-auto max-w-full rounded-2xl shadow-2xl select-none"
+          draggable="false"
+        />
 
         {count > 1 && (
           <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-xs px-2 py-1 rounded bg-black/50 text-white dark:bg-white/60 dark:text-black backdrop-blur-sm">

@@ -13,12 +13,12 @@ export const img = (
 const pad = (n, size = 2) => String(n).padStart(size, "0");
 
 // Generate a list of /public images following a pattern
-// Example: gen("/images/Portrait/image", 15) -> [/images/Portrait/image-01.jpg ...]
+// Example: gen("/images/Portrait/image", 15) -> [/images/Portrait/image-01.webp ...]
 const gen = (basePath, count, opts = {}) => {
   const {
     start = 1,
     padSize = 2,
-    ext = ".jpg",
+    ext = ".webp", // switched to webp
     altPrefix = "Image",
     w = 1600,
     h = 1067,
@@ -34,9 +34,11 @@ const gen = (basePath, count, opts = {}) => {
 
 /**
  * IMPORTANT — filenames must match EXACTLY (case-sensitive on the server):
- * - Aerial-Landscape/image-01.jpg … image-12.jpg
- * - Fashion-Abstract/image-01.jpg … image-12.jpg
- * - Portrait/image-01.jpg … image-15.jpg
+ * - Aerial-Landscape/image-01.webp … image-12.webp
+ * - Fashion-Abstract/image-01.webp … image-8.webp
+ * - Portrait/image-01.webp … image-15.webp
+ * - projects/Game-Time/image-01.webp … image-08.webp
+ * - projects/Interiors/image-01.webp … image-13.webp
  */
 export const IMAGES = {
   aerialLandscape: gen("/images/Aerial-Landscape/image", 12, {
@@ -47,5 +49,11 @@ export const IMAGES = {
   }),
   portrait: gen("/images/Portrait/image", 15, {
     altPrefix: "Portrait",
+  }),
+  projectsGameTime: gen("/images/projects/Game-Time/image", 8, {
+    altPrefix: "Game Time",
+  }),
+  projectsInteriors: gen("/images/projects/Interiors/image", 13, {
+    altPrefix: "Interiors",
   }),
 };

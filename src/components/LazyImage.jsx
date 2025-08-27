@@ -1,114 +1,96 @@
 ﻿// src/components/LazyImage.jsx
-import React, { useEffect, useRef, useState } from "react";
-import { SITE } from "../config/site.js";
-
-// Decide whether we're on a Cloudflare-hosted origin
-function isProdCF() {
-  if (typeof window === "undefined") return false;
-  const h = window.location.hostname;
-  return !(
-    h === "localhost" ||
-    h === "127.0.0.1" ||
-    h === "[::1]"
-  );
-}
-
-// Build a Cloudflare Image Resizing URL (same-zone)
-function cfUrl(src, opts = {}) {
-  // Ensure we have a proper URL object
-  const u = new URL(src, window.location.origin);
-
-  // Params: tweak to your taste
-  const {
-    width,           // number | undefined
-    quality = 75,    // 1..100
-    fit = "cover",   // 'cover'|'contain'|'scale-down'|'pad'
-    format = "auto", // 'auto' to negotiate AVIF/WebP/JPEG
-  } = opts;
-
-  const parts = [];
-  if (width) parts.push(`width=${width}`);
-  parts.push(`fit=${fit}`);
-  parts.push(`quality=${quality}`);
-  parts.push(`format=${format}`);
-
-  // Cloudflare accepts relative paths for same zone
-  // e.g. /cdn-cgi/image/width=1200,quality=75,format=auto/images/foo.jpg
-  return `/cdn-cgi/image/${parts.join(",")}${u.pathname}${u.search}`;
-}
+import React, { useMemo, useState } from "react";
+import { GENERATED_IMAGES } from "../data/generatedImages.js";
 
 /**
  * LazyImage
- * - IntersectionObserver to defer load
- * - Uses CF Image Resizing on production only
- * - Falls back to the raw src on error
+ * - Uses responsive <picture> with webp variants from GENERATED_IMAGES
+ * - Shows a blurred tiny placeholder until the selected source finishes
+ * - Reserves space using aspect-ratio to avoid layout shift
+ *
+ * Props:
+ *  - src: string (key in GENERATED_IMAGES, e.g. "Portrait/image-01.webp")
+ *  - alt?: string
+ *  - width?: number  (optional metadata for aspect ratio – recommended)
+ *  - height?: number (optional metadata for aspect ratio – recommended)
+ *  - className?: string (applied to wrapper)
  */
 export default function LazyImage({
   src,
   alt = "",
-  caption,
+  width,
+  height,
   className = "",
-  watermark = true,
-  width,   // optional intrinsic width
-  height,  // optional intrinsic height
 }) {
-  const [inView, setInView] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const ref = useRef(null);
 
-  // Kick in when close to viewport
-  useEffect(() => {
-    if (!ref.current) return;
-    const io = new IntersectionObserver(
-      (entries) => entries.forEach((e) => e.isIntersecting && setInView(true)),
-      { rootMargin: "300px" }
+  const variants = useMemo(() => GENERATED_IMAGES[src] || [], [src]);
+  const sorted = useMemo(
+    () => [...variants].sort((a, b) => a.width - b.width),
+    [variants]
+  );
+
+  // Blur placeholder = smallest variant (if present)
+  const tiny = sorted[0]?.src;
+  // Fallback = largest variant (ensures quality if browser ignores <source>)
+  const fallback = sorted[sorted.length - 1]?.src;
+
+  // Build srcset string: "url 320w, url 640w, ..."
+  const srcSet = useMemo(
+    () => sorted.map((v) => `${v.src} ${v.width}w`).join(", "),
+    [sorted]
+  );
+
+  // Sensible default sizes (you can tailor to your columns)
+  const sizes =
+    "(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw";
+
+  // Reserve space via CSS aspect-ratio (using provided width/height if available)
+  const ratio =
+    width && height ? `${width} / ${height}` : undefined;
+
+  if (!sorted.length) {
+    // Fall back gracefully if the manifest key wasn't found
+    return (
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        className={className}
+      />
     );
-    io.observe(ref.current);
-    return () => io.disconnect();
-  }, []);
-
-  // Compute final URL:
-  // - in dev: raw src
-  // - in prod: CF url (unless we already failed once)
-  const finalSrc =
-    failed || !isProdCF()
-      ? src
-      : cfUrl(src, { width: 2000, quality: 78, fit: "cover", format: "auto" });
+  }
 
   return (
-    <figure ref={ref} className={`relative group overflow-hidden ${className}`}>
-      {inView && (
+    <div
+      className={`relative overflow-hidden ${className}`}
+      style={ratio ? { aspectRatio: ratio } : undefined}
+    >
+      {/* Blur-up placeholder */}
+      {tiny && (
         <img
-          src={finalSrc}
-          alt={alt}
-          loading="lazy"
-          decoding="async"
-          width={width}
-          height={height}
-          onLoad={() => setLoaded(true)}
-          onError={() => {
-            // If CF URL fails once, fall back to original for this component
-            if (!failed && isProdCF()) setFailed(true);
-          }}
-          className={[
-            "w-full h-auto transition duration-700 will-change-transform",
-            loaded ? "scale-100 blur-0 opacity-100" : "scale-[1.02] blur-sm opacity-80",
-          ].join(" ")}
-          // prevent referrer weirdness when mixing http/https
-          referrerPolicy="no-referrer-when-downgrade"
+          src={tiny}
+          alt=""
+          aria-hidden="true"
+          className={`absolute inset-0 w-full h-full object-cover scale-105 blur-lg transition-opacity duration-500 ${
+            loaded ? "opacity-0" : "opacity-100"
+          }`}
         />
       )}
 
-      {watermark && (
-        <span className="pointer-events-none absolute bottom-2 right-3 text-[10px] tracking-widest uppercase opacity-70 mix-blend-overlay select-none">
-          © {SITE.owner.toUpperCase()}
-        </span>
-      )}
-
-      {caption && (
-        <figcaption className="mt-2 text-xs opacity-70">{caption}</figcaption>
-      )}
-    </figure>
+      {/* Responsive image */}
+      <picture>
+        <source type="image/webp" srcSet={srcSet} sizes={sizes} />
+        <img
+          src={fallback}
+          alt={alt}
+          loading="lazy"
+          onLoad={() => setLoaded(true)}
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${
+            loaded ? "opacity-100" : "opacity-0"
+          }`}
+        />
+      </picture>
+    </div>
   );
 }
