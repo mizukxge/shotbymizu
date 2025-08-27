@@ -8,13 +8,13 @@ import { SITE } from "../config/site.js";
  * - CSS Columns layout preserved
  * - Preloads all images before revealing
  * - Measures tiles to compute row-wise reveal order
- * - Lightbox: watermark overlay + "Download (watermarked)" button
+ * - Lightbox: watermark overlay, no download button
  */
 export function Masonry({
   items = [],
   columnClass = "columns-1 sm:columns-2 lg:columns-3 gap-6",
   seed,
-  watermark = false, // still respected on grid thumbnails
+  watermark = false,
 }) {
   const images = useMemo(
     () =>
@@ -26,12 +26,12 @@ export function Masonry({
     [items, seed]
   );
 
-  // Preload all images first
   const [ready, setReady] = useState(false);
   const [visible, setVisible] = useState(() => images.map(() => false));
   const itemRefs = useRef([]);
   itemRefs.current = [];
 
+  // Preload all images first
   useEffect(() => {
     let cancelled = false;
     setReady(false);
@@ -43,8 +43,7 @@ export function Masonry({
         img.decoding = "async";
         img.loading = "eager";
         img.onload = () => resolve(true);
-        img.onerror = () => resolve(true); // don't block sequence
-        // IMPORTANT for canvas export safety if your origin ever differs:
+        img.onerror = () => resolve(true);
         img.crossOrigin = "anonymous";
         img.src = src;
       });
@@ -99,10 +98,8 @@ export function Masonry({
     };
   }, [ready, images.length]);
 
-  // Lightbox state
   const [openIndex, setOpenIndex] = useState(null);
 
-  // Scroll lock when modal is open
   useEffect(() => {
     if (openIndex !== null) {
       const prev = document.body.style.overflow;
@@ -123,7 +120,6 @@ export function Masonry({
 
   return (
     <>
-      {/* Masonry container — CSS columns keep perfect guttering */}
       <div className={columnClass}>
         {images.map((img, i) => {
           const isVisible = visible[i];
@@ -157,7 +153,6 @@ export function Masonry({
         })}
       </div>
 
-      {/* Lightbox modal */}
       {openIndex !== null && images[openIndex] && (
         <Lightbox
           image={images[openIndex]}
@@ -177,13 +172,11 @@ export function Masonry({
 /* -----------------------
    Lightbox with watermark
    ----------------------- */
-
 function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
   const nextBtnRef = useRef(null);
   const containerRef = useRef(null);
-  const [show, setShow] = useState(false); // enter/exit animation flag
+  const [show, setShow] = useState(false);
 
-  // Focus & enter animation
   useEffect(() => {
     const id = requestAnimationFrame(() => {
       setShow(true);
@@ -193,7 +186,6 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
     return () => cancelAnimationFrame(id);
   }, [count]);
 
-  // Keyboard: Esc / Arrows
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") {
@@ -208,75 +200,13 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onNext, onPrev, count]);
 
-  // Smooth exit then unmount
   const requestClose = () => {
     setShow(false);
     setTimeout(onClose, 320);
   };
 
-  // Prevent right-click save in the modal (soft deterrent)
   const preventContext = (e) => e.preventDefault();
 
-  // Build a *watermarked* image and download it
-  const downloadWatermarked = async () => {
-    try {
-      const src = image?.src;
-      if (!src) return;
-
-      // Load image fully
-      const img = await loadImage(src);
-
-      // Create canvas
-      const canvas = document.createElement("canvas");
-      const W = img.naturalWidth || img.width;
-      const H = img.naturalHeight || img.height;
-      canvas.width = W;
-      canvas.height = H;
-      const ctx = canvas.getContext("2d");
-
-      // Draw original
-      ctx.drawImage(img, 0, 0, W, H);
-
-      // Watermark text
-      const text = `© ${String(SITE.owner || "shotbymizu").toUpperCase()}`;
-
-      // Size & placement (relative to image size)
-      const pad = Math.max(10, Math.round(W * 0.012));
-      const fontPx = Math.max(14, Math.round(W * 0.018));
-      ctx.font = `600 ${fontPx}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace`;
-      ctx.textBaseline = "bottom";
-
-      const metrics = ctx.measureText(text);
-      const tw = metrics.width;
-      const th = fontPx; // rough height
-
-      const x = W - pad - tw;
-      const y = H - pad;
-
-      // Shadow for legibility
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fillRect(x - pad * 0.4, y - th - pad * 0.4, tw + pad * 0.8, th + pad * 0.8);
-
-      // Text (white)
-      ctx.fillStyle = "#fff";
-      ctx.fillText(text, x, y);
-
-      // Export & download
-      const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.92));
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = makeDownloadName(src, SITE?.owner);
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      console.error("Download failed", e);
-    }
-  };
-
-  // Theme-aware glass buttons:
   const btnBase =
     "h-10 w-10 rounded-full flex items-center justify-center shadow " +
     "focus:outline-none focus:ring-2 focus:ring-white dark:focus:ring-black " +
@@ -301,7 +231,6 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
       onTouchStart={(e) => e.currentTarget === e.target && requestClose()}
       onContextMenu={preventContext}
     >
-      {/* Image container */}
       <div
         ref={containerRef}
         tabIndex={-1}
@@ -313,7 +242,6 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
         onMouseDown={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
       >
-        {/* Prev / Next */}
         {count > 1 && (
           <>
             <button
@@ -341,7 +269,7 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
           </>
         )}
 
-        {/* Image + overlay watermark (visible while viewing) */}
+        {/* Image + overlay watermark */}
         <div className="relative">
           <img
             src={image?.src}
@@ -351,59 +279,17 @@ function Lightbox({ image, index, count, onPrev, onNext, onClose }) {
             onContextMenu={preventContext}
             crossOrigin="anonymous"
           />
-
-          {/* On-screen watermark */}
           <span className="pointer-events-none absolute bottom-3 right-4 text-[11px] md:text-xs tracking-widest uppercase opacity-80 select-none text-white bg-black/40 rounded px-2 py-1">
             © {String(SITE.owner || "shotbymizu").toUpperCase()}
           </span>
         </div>
 
-        {/* Counter (bottom-center) */}
         {count > 1 && (
           <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-xs px-2 py-1 rounded bg-black/50 text-white dark:bg-white/60 dark:text-black backdrop-blur-sm">
             {index + 1} / {count}
           </div>
         )}
-
-        {/* Download (watermarked) */}
-        <button
-          type="button"
-          onClick={downloadWatermarked}
-          className={`absolute bottom-3 right-3 h-9 px-3 rounded-full text-xs font-medium
-                      ${btnTheme} cursor-pointer`}
-          title="Download (watermarked)"
-        >
-          Download
-        </button>
       </div>
     </div>
   );
-}
-
-/* -------------
-   Small helpers
-   ------------- */
-
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.decoding = "async";
-    img.crossOrigin = "anonymous"; // safer for canvas export if ever served with CORS
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
-  });
-}
-
-function makeDownloadName(src, owner) {
-  try {
-    const u = new URL(src, window.location.origin);
-    const base = u.pathname.split("/").pop() || "image.jpg";
-    const dot = base.lastIndexOf(".");
-    const name = dot > 0 ? base.slice(0, dot) : base;
-    const brand = (owner || "shotbymizu").toString().replace(/\s+/g, "");
-    return `${name}-${brand}-wm.jpg`;
-  } catch {
-    return `download-${(owner || "shotbymizu")}-wm.jpg`;
-  }
 }
